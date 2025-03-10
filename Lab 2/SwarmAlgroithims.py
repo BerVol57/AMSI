@@ -5,11 +5,14 @@ import sys
 
 ### PSO
 class Particle:
-    def __init__(self, fitness, dim, minx, maxx):
-            
+    def __init__(self, fitness, dim, minx, maxx, minv, maxv):
+        
         self.position = np.random.uniform(minx, maxx)
             
-        self.velocity = np.random.uniform(minx, maxx)
+        self.velocity = np.random.uniform(minv, maxv)
+        
+        while fitness(self.position) == sys.float_info.max:
+            self.position = np.random.uniform(minx, maxx)
         
         self.fitness = fitness(self.position)
         
@@ -18,11 +21,12 @@ class Particle:
     
 
 
-def PSO(fitness, max_iter, n, dim, minx, maxx, a1 = 1.49445, a2 = 1.49445):
+def PSO(fitness, max_iter, n, dim, minx, maxx, minv, maxv, a1 = 1.49445, a2 = 1.49445, viz=False):
+    SWRM = []
+    BP = []
     BSF = []
     # create n random particles
-    swarm = [Particle(fitness, dim, minx, maxx) for i in range(n)]
-    
+    swarm = [Particle(fitness, dim, minx, maxx, minv, maxv) for _ in range(n)]    
     # compute best_pos & best_fit
     best_swarm_pos = np.zeros(dim)
     
@@ -32,8 +36,8 @@ def PSO(fitness, max_iter, n, dim, minx, maxx, a1 = 1.49445, a2 = 1.49445):
         for i in range(n):
             
 
-            r1 = np.random.rand()
-            r2 = np.random.rand()
+            r1 = np.random.rand(dim)
+            r2 = np.random.rand(dim)
 
         
             swarm[i].velocity = (
@@ -42,7 +46,7 @@ def PSO(fitness, max_iter, n, dim, minx, maxx, a1 = 1.49445, a2 = 1.49445):
                 (a2 * r2 * (best_swarm_pos - swarm[i].position))
             )
             
-            swarm[i].velocity = np.clip(swarm[i].velocity, [x/2 for x in minx], [x/2 for x in maxx])
+            swarm[i].velocity = np.clip(swarm[i].velocity, minv, maxv)
                 
             swarm[i].position += swarm[i].velocity
             
@@ -63,17 +67,28 @@ def PSO(fitness, max_iter, n, dim, minx, maxx, a1 = 1.49445, a2 = 1.49445):
             if swarm[i].fitness < best_swarm_fitnessVal:
                 best_swarm_fitnessVal = swarm[i].fitness
                 best_swarm_pos = copy.copy(swarm[i].position)
-        
+        SWRM.append(np.array([p.position for p in swarm]))
+        BP.append(best_swarm_pos)
         BSF.append(copy.copy(best_swarm_fitnessVal))
-        
-    return BSF
+    
+    if viz:
+        return BSF, BP, SWRM
+    else:
+        return BSF
 
 
 ### Bee
-def BA(f, max_iter, n, dim, minx, maxx, elite_sites, elite_size):
+def BA(f, max_iter, n, dim, minx, maxx, L_s, L_es, z_e, z_0, delta=.1, teta_max=.9, alpha=.9, viz=False):
+    SWRM = []
+    BP = []
     BBF = []
     
     bees = np.random.uniform(minx, maxx, (n, dim))
+    
+    for i in range(n):
+        while f(bees[i]) == sys.float_info.max:
+            bees[i] = np.random.uniform(minx, maxx)
+    
     best_pos = None
     best_fitness = sys.float_info.max
     
@@ -87,9 +102,10 @@ def BA(f, max_iter, n, dim, minx, maxx, elite_sites, elite_size):
             best_fitness = fitness[sorted_indices[0]]
             best_pos = bees[0].copy()
         
-        for i in range(elite_sites):
-            for _ in range(elite_size):
-                candidate = bees[i] + np.random.uniform(-.1, .1, dim)
+        for i in range(L_es):
+            for _ in range(z_e):
+                teta = teta_max*(alpha**iteration)
+                candidate = bees[i] + teta*(np.array(maxx) - np.array(minx))*np.random.uniform(-1, 1, dim)
                 candidate = np.clip(candidate, minx, maxx)
                 candidate_val = f(candidate)
                 
@@ -97,22 +113,33 @@ def BA(f, max_iter, n, dim, minx, maxx, elite_sites, elite_size):
                     bees[i] = candidate
                     fitness[i] = candidate_val
         
-        for i in range(elite_sites, n):
+        for i in range(L_es, n):
             bees[i] = np.random.uniform(minx, maxx)
-
         
+        
+        SWRM.append(bees)
+        BP.append(best_pos)
         BBF.append(best_fitness)
-    
-    return BBF
+        
+    if viz:
+        return BBF, BP, SWRM
+    else:
+        return BBF
 
 
 ### Firefly
-def FA(f, max_iter, n, dim, minx, maxx, alpha=.2, beta0=1., gamma=1.):
+def FA(f, max_iter, n, dim, minx, maxx, alpha=.2, beta_max=.9, gamma=.9, viz=False):
     fireflies = np.random.uniform(minx, maxx, (n, dim))
+    
+    for i in range(n):
+        while f(fireflies[i]) == sys.float_info.max:
+            fireflies[i] = np.random.uniform(minx, maxx)
     
     best_pos = None
     best_val = sys.float_info.max
     
+    SWRM = []
+    BP = []
     BFA = []
     
     for iteration in range(max_iter):
@@ -129,12 +156,17 @@ def FA(f, max_iter, n, dim, minx, maxx, alpha=.2, beta0=1., gamma=1.):
             for j in range(n):
                 if intensity[j] < intensity[i]:
                     r = np.linalg.norm(fireflies[i] - fireflies[j])
-                    beta = beta0 * np.exp(-gamma * r**2)
+                    beta = beta_max * np.exp(-gamma * r)
                     fireflies[i] += beta * (fireflies[j] - fireflies[i]) \
-                        + alpha * (np.random.rand(dim) - .5)
+                        + alpha * (np.random.uniform(-.5, .5, dim))
                     
                     fireflies[i] = np.clip(fireflies[i], minx, maxx)
-        
+
+        SWRM.append(fireflies)
+        BP.append(best_pos)
         BFA.append(best_val)
     
-    return BFA
+    if viz:
+        return BFA, BP, SWRM
+    else:
+        return BFA
