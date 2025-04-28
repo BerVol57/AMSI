@@ -5,10 +5,10 @@ class GA:
     def __init__(self, 
                         items: np.ndarray, 
                         max_weight: int, 
-                 population_size=100, 
-                 generations=1000, 
-                 mutation_rate=0.1, 
-                 tournament_size=3):
+                population_size=100, 
+                generations=1000, 
+                mutation_rate=0.2, 
+                tournament_size=5):
 
 
         self.population_size = population_size
@@ -22,23 +22,20 @@ class GA:
         # Максимальна вага рюкзака
         self.max_weight = max_weight
         
-        self.w = int(self.max_weight // min(self.items, key=lambda x: x[0])[0])
-        self.w = self.w.bit_length()
+        self.w = 4
         
-        self.to_int = np.ones(self.w, dtype=int)
-        for i in range(1, self.w):
-            self.to_int[i] = 2*self.to_int[i-1]
-        self.to_int = self.to_int[::-1]
+        if self.items.shape[1] == 3:
+            self.noi_limit = self.items[..., 2]
+        else:
+            self.noi_limit = np.zeros(self.items.shape[0])
+            for i in range(self.items.shape[0]):
+                self.noi_limit[i] = self.max_weight // self.items[i][0]
 
     # Функція пристосованості
     def fitness(self, chromosome):
-        a = self.to_int @ chromosome
-        
-        for i in range(len(a)):
-            a[i] = np.round(a[i]/(1<<self.w) * (self.max_weight/self.items[i][0]))
-            
-        total_weight = self.items[..., 0] @ a
-        total_value = self.items[..., 1] @ a
+        counts = np.round(chromosome/((1 << self.w) - 1)* self.noi_limit)
+        total_weight = self.items[..., 0] @ counts
+        total_value = self.items[..., 1] @ counts
         # Штраф за перевищення ваги
         if total_weight > self.max_weight:
             return -1
@@ -46,70 +43,64 @@ class GA:
 
     # Створення випадкової хромосоми
     def create_chromosome(self, length):
-        chromosome = np.random.randint(0, 2, (self.w, length), dtype=int)
+        chromosome = np.zeros(length, dtype=int)
         return chromosome
 
     # Відбір турніром
     def tournament_selection(self, population):
         contestants = random.sample(population, self.tournament_size)
-        winner = max(contestants, key=lambda x: x[1])
-        return winner[0]
+        winner = max(contestants, key=lambda x: self.fitness(x))
+        return winner
 
     # Одноточковий кросовер
     def crossover(self, parent1, parent2):
         child1 = np.zeros_like(parent1)
         child2 = np.zeros_like(parent1)
-        
-        for i in range(len(parent1)):
-            point = random.randint(1, self.w)
+
+        for i in range(parent1.shape[0]):
             
-            child1[i, :point] = parent1[i, :point]
-            child1[i, point:] = parent2[i, point:]
+            point = random.randint(1, self.w-1)
             
-            child2[i, :point] = parent1[i, :point]
-            child2[i, point:] = parent2[i, point:]
+            child1[i] = ((parent1[i] >> point) << point)\
+                ^ (parent2[i] & ((1 << point) - 1))
             
-            # child1[i] = ((parent1[i] >> point) << point)\
-            #     ^ (parent2[i] & ((1 << point) - 1))
-            
-            # child2[i] = ((parent2[i] >> point) << point)\
-            #     ^ (parent1[i] & ((1 << point) - 1))
+            child2[i] = ((parent2[i] >> point) << point)\
+                ^ (parent1[i] & ((1 << point) - 1))
             
             return child1, child2
-        return parent1, parent2
 
     # Мутація
     def mutate(self, chromosome):
         if random.random() < self.mutation_rate:
-            for chrom in chromosome:
-                if random.random() < self.mutation_rate:
-                    a, b = sorted(np.random.choice(chromosome.shape[1], 2))
-                    # Зміна значення хромосими
-                    chrom[a:b] = chrom[a:b][::-1]
+            for _ in range(chromosome.shape[0]):
+                # Обираємо випадковий елемент хромосоми
+                index = np.random.randint(0, chromosome.shape[0])
+                # Інвертуємо значення випадкового біта
+                a, b = sorted(np.random.randint(0, self.w, 2), reverse=True)
+                
+                mutated_chromosome = chromosome[index]
+                mutated_chromosome ^= ((1 << (a - b)) - 1) << b
+                chromosome[index] = mutated_chromosome
         return chromosome
 
     # Генетичний алгоритм
     def run(self):
-        best_choises = []
+        best_choises = np.zeros((self.generations, self.items.shape[0]), dtype=int)
         best_fitnesses = np.zeros(self.generations, dtype=int)
         
         population = []
         chromosome_length = self.items.shape[0]
         
         # Ініціалізація популяції
-        for _ in range(self.population_size):
+        for i in range(self.population_size):
             chrom = self.create_chromosome(chromosome_length)
-            fit = self.fitness(chrom)
-            population.append((chrom, fit))
+            population.append(chrom)
+        
+        pop_value_history = []
         
         for gen in range(self.generations):
             # Відбір та створення нового покоління
-            new_population = []
-            
-            elite = max(population, key=lambda x: x[1])
-            new_population.append(elite)
-            
-            while len(new_population) < self.population_size:
+            while len(population) < 2*self.population_size:
                 # Вибір батьків
                 parent1 = self.tournament_selection(population)
                 parent2 = self.tournament_selection(population)
@@ -122,18 +113,18 @@ class GA:
                 child2 = self.mutate(child2)
                 
                 # Додавання дітей
-                for child in [child1, child2]:
-                    if len(new_population) >= self.population_size:
-                        break
-                    fit = self.fitness(child)
-                    new_population.append((child, fit))
-            
-            population = new_population
+                population.append(child1)
+                population.append(child2)
+                
             # Збереження найкращого результату
-            current_best = max(population, key=lambda x: x[1])
+            population = sorted(population, key=lambda x: self.fitness(x), reverse=True)
+            population = population[:self.population_size]
             
-            best_fitnesses[gen] = current_best[1]
-            best_choises.append(current_best[0])
+            current_best = population[0]
+            
+            best_fitnesses[gen] = self.fitness(current_best)
+            best_choises[gen] = current_best
+            pop_value_history.append([self.fitness(population[i]) for i in range(self.population_size)])
         
         
-        return best_choises, best_fitnesses
+        return best_choises, best_fitnesses, pop_value_history
